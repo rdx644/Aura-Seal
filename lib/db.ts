@@ -5,7 +5,7 @@ let instance: Pool | undefined;
 export function pool() {
   if (!instance) {
     if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required');
-    instance = new Pool({ connectionString: process.env.DATABASE_URL, max: 10, options: '-c search_path=auraseal,pg_catalog' });
+    instance = new Pool({ connectionString: process.env.DATABASE_URL, max: 10, connectionTimeoutMillis: 5_000, statement_timeout: 30_000, options: '-c search_path=auraseal,pg_catalog' });
     instance.on('error', () => console.error(JSON.stringify({ event: 'postgres_idle_connection_error' })));
   }
   return instance;

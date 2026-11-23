@@ -3,13 +3,13 @@ import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { pipeline } from 'node:stream/promises';
-import { Readable } from 'node:stream';
+import type { Writable } from 'node:stream';
 import { Resvg, type ResvgRenderOptions } from '@resvg/resvg-js';
 import { PDFDocument } from 'pdf-lib';
 import { artwork, video } from '../../packages/certificate/art';
 import { verificationQr } from '../../packages/certificate/qr';
 import type { Claim } from '../../lib/contracts';
+import { animationFrames } from './frames';
 
 export type Exports = { png: Buffer; pdf: Buffer; mp4: Buffer | null };
 type Job = { claim: Claim; url: string };
@@ -31,25 +31,43 @@ function rasterizer(claim: Claim) {
   return (svg: string) => new Resvg(svg, options).render();
 }
 
+async function streamFrames(input: Writable, frames: Iterable<Buffer>) {
+  // A frame buffer can be reused once the stream confirms it has finished writing.
+  input.on('error', () => {});
+  try {
+    for (const frame of frames) {
+      await new Promise<void>((resolve, reject) => {
+        input.write(frame, error => error ? reject(error) : resolve());
+      });
+    }
+    input.end();
+  } catch (error) {
+    input.destroy();
+    throw error;
+  }
+}
+
 async function encode(job: Job, path: string, bitrate: number, ffmpeg: string, raster: ReturnType<typeof rasterizer>) {
   const qr = verificationQr(job.url);
-  function* frames() {
-    for (let frame = 0; frame < video.fps * video.seconds; frame++) {
-      yield raster(artwork(job.claim, { qr, frame })).pixels;
-    }
-  }
   const process = spawn(ffmpeg, [
     '-hide_banner', '-loglevel', 'error', '-y', '-f', 'rawvideo', '-pixel_format', 'rgba',
     '-video_size', video.width + 'x' + video.height, '-framerate', String(video.fps), '-i', 'pipe:0',
-    '-vf', 'format=yuv420p', '-an', '-c:v', 'libx264', '-threads', '2', '-preset', 'veryfast',
+    '-filter_threads', '1', '-vf', 'format=yuv420p', '-an', '-c:v', 'libx264', '-threads', '2', '-preset', 'veryfast',
     '-b:v', bitrate + 'k', '-maxrate', bitrate + 'k', '-bufsize', bitrate + 'k', '-movflags', '+faststart', path,
-  ], { stdio: ['pipe', 'ignore', 'ignore'], signal: AbortSignal.timeout(100_000), windowsHide: true });
+  ], { stdio: ['pipe', 'ignore', 'pipe'], signal: AbortSignal.timeout(100_000), windowsHide: true });
+  let diagnostics = '';
+  process.stderr.on('data', chunk => { diagnostics = (diagnostics + chunk.toString()).slice(-4096); });
   const done = new Promise<void>((resolve, reject) => {
     process.once('error', reject);
-    process.once('close', code => code === 0 ? resolve() : reject(new Error('Encoder failed')));
+    process.once('close', code => code === 0 ? resolve() : reject(new Error('Encoder failed (' + code + '): ' + diagnostics.trim())));
   });
   try {
-    await Promise.all([done, pipeline(Readable.from(frames(), { objectMode: false }), process.stdin)]);
+    const [encoded, streamed] = await Promise.allSettled([
+      done,
+      streamFrames(process.stdin, animationFrames(job.claim, qr, raster)),
+    ]);
+    if (encoded.status === 'rejected') throw encoded.reason;
+    if (streamed.status === 'rejected') throw streamed.reason;
   } finally {
     if (process.exitCode === null && process.signalCode === null) process.kill();
   }

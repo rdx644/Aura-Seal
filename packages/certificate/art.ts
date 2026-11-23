@@ -22,6 +22,7 @@ export function frameState(frame: number) {
     x: Math.round(-600 + 2500 * curve((time - .18) / 4.4)),
     sweep: .5 * curve(time / .35) * (1 - curve((time - 4.6) / .55)),
     border: .5 + .45 * Math.sin(Math.PI * time / 6) ** 2,
+    glowOffset: Math.round(glowTravel * Math.cos(time / 6 * 2 * Math.PI)),
     glow: .28 + .26 * Math.sin(Math.PI * time / 6) ** 2,
     name: reveal(.5), tier: reveal(1.05), rank: reveal(1.6), badge: reveal(2.13),
   };
@@ -42,13 +43,20 @@ function fittedSize(text: string, width: number, max: number) {
   return Math.min(max, Math.floor(width / Math.max(units, 1)));
 }
 
-type ArtOptions = { frame?: number; qr?: Qr; id?: string };
+export const artLayers = ['paper', 'glow', 'rings', 'sweep', 'border', 'label', 'name', 'tier', 'rank', 'badge'] as const;
+export type ArtLayer = typeof artLayers[number];
+export const sweepOrigin = 300;
+export const glowOrigin = 975;
+export const glowTravel = 58;
+type ArtOptions = { frame?: number; qr?: Qr; id?: string; layer?: ArtLayer };
 
 export function artwork(claim: Claim, options: ArtOptions = {}) {
-  const { id = 'certificate', frame, qr } = options;
+  const { id = 'certificate', frame, qr, layer } = options;
   const theme = palettes[claim.decision.theme];
-  const state = frame === undefined
-    ? { x: 1600, sweep: 0, border: .85, glow: .4, name: 1, tier: 1, rank: 1, badge: 1 }
+  const state = layer
+    ? { x: sweepOrigin, sweep: 1, border: 1, glow: 1, glowOffset: 0, name: 1, tier: 1, rank: 1, badge: 1 }
+    : frame === undefined
+    ? { x: 1600, sweep: 0, border: .85, glow: .4, glowOffset: -10, name: 1, tier: 1, rank: 1, badge: 1 }
     : frameState(frame);
   const density = claim.tier === 'winner' ? 8 : claim.tier === 'finalist' ? 6 : 4;
   const ribbons = Array.from({ length: density }, (_, index) =>
@@ -68,32 +76,41 @@ export function artwork(claim: Claim, options: ArtOptions = {}) {
   const eventSize = fittedSize(event, 850, 27);
   const issuerSize = fittedSize(claim.issuer, 660, 19);
   const meta = date + (claim.location ? '  ·  ' + claim.location : '');
+  const parts: Record<ArtLayer, string> = {
+    paper: '<rect width="1280" height="720" rx="28" fill="url(#' + id + '-paper)"/>',
+    glow: '<ellipse cx="' + (glowOrigin + state.glowOffset) + '" cy="120" rx="435" ry="355" fill="url(#' + id + '-glow)" opacity="' + state.glow + '"/>',
+    rings: ribbons,
+    sweep: '<path d="M' + state.x + ' 0h360l-270 720h-360z" opacity="' + state.sweep + '" fill="url(#' + id + '-sweep)"/>',
+    border: '<rect x="25" y="25" width="1230" height="670" rx="16" fill="none" stroke="url(#' + id + '-border)" stroke-width="3" opacity="' + state.border + '"/>',
+    label: [
+      '<rect x="39" y="39" width="1202" height="642" rx="12" fill="none" stroke="' + theme.line + '" opacity=".54"/>',
+      '<path d="M100 117h31l-15-26z M108 104h30l-15 26z" fill="' + theme.accent + '" opacity=".65"/>',
+      '<text x="152" y="115" font-size="' + issuerSize + '" letter-spacing="2" fill="' + theme.dim + '">' + escape(claim.issuer) + '</text>',
+      '<text x="100" y="202" font-size="19" letter-spacing="6" font-weight="700" fill="' + theme.accent + '">CERTIFICATE OF ACHIEVEMENT</text>',
+      '<path d="M100 541h756" stroke="' + theme.line + '" opacity=".65"/>',
+      '<text x="100" y="584" font-size="19" fill="' + theme.dim + '">' + escape(claim.decision.message) + '</text>',
+      '<text x="100" y="636" font-size="13" letter-spacing="2.3" font-weight="700" fill="' + theme.accent + '">' + (claim.demo ? 'CONCEPT DEMO · FICTIONAL CREDENTIAL' : 'ISSUED WITH AURASEAL') + '</text>',
+    ].join(''),
+    name: '<text font-size="' + fontSize + '" font-family="Georgia, DejaVu Serif, Noto Sans CJK JP, Microsoft YaHei, serif" font-weight="700" opacity="' + state.name + '">' + name + '</text>',
+    tier: '<g opacity="' + state.tier + '"><text x="100" y="387" font-size="' + eventSize + '">' + escape(event) + '</text>' +
+      '<text x="100" y="422" font-size="' + fittedSize(meta, 850, 17) + '" fill="' + theme.dim + '">' + escape(meta) + '</text></g>',
+    rank: '<g opacity="' + state.rank + '">' + rank + '</g>',
+    badge: [
+      '<g opacity="' + state.badge + '"><path d="M1083 135l64 24v43c0 45-35 69-64 79-28-10-64-34-64-79v-43z" fill="' + theme.bg + '" stroke="' + theme.accent + '" stroke-width="2"/>',
+      '<path d="' + (claim.tier === 'winner' ? 'M1083 159l12 23 25 3-19 17 5 25-23-12-23 12 5-25-19-17 25-3z' : claim.tier === 'finalist' ? 'M1083 160l32 29-32 35-32-35z' : 'M1060 195l16 16 32-35') + '" stroke="' + theme.accent + '" fill="none" stroke-width="4" stroke-linejoin="round"/>',
+      '<text x="1083" y="252" text-anchor="middle" font-size="14" letter-spacing="1.4">' + escape(labels[claim.tier].toUpperCase()) + '</text>',
+      qrArt + '</g>',
+    ].join(''),
+  };
+  const render = layer ? parts[layer] : artLayers.map(key => parts[key]).join('');
+  const bleed = layer === 'glow' ? glowTravel : 0;
+  const width = video.width + bleed * 2;
   return [
-    '<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-label="Achievement certificate for ' + escape(claim.displayName) + '">',
+    '<svg xmlns="http://www.w3.org/2000/svg" width="' + width + '" height="720" viewBox="' + (-bleed) + ' 0 ' + width + ' 720" role="img" aria-label="Achievement certificate for ' + escape(claim.displayName) + '">',
     '<defs><linearGradient id="' + id + '-paper" x2="1" y2="1" gradientUnits="objectBoundingBox"><stop stop-color="' + theme.panel + '"/><stop offset="1" stop-color="' + theme.bg + '"/></linearGradient>',
     '<linearGradient id="' + id + '-border"><stop stop-color="#ef6321"/><stop offset="1" stop-color="#046a38"/></linearGradient>',
     '<linearGradient id="' + id + '-sweep"><stop stop-color="#f58b50" stop-opacity="0"/><stop offset=".5" stop-color="#ffb383" stop-opacity=".65"/><stop offset="1" stop-color="#73d4a6" stop-opacity="0"/></linearGradient>',
     '<radialGradient id="' + id + '-glow"><stop stop-color="' + theme.secondary + '" stop-opacity=".58"/><stop offset="1" stop-color="' + theme.secondary + '" stop-opacity="0"/></radialGradient></defs>',
-    '<rect width="1280" height="720" rx="28" fill="url(#' + id + '-paper)"/>',
-    '<ellipse cx="' + (975 + Math.round(58 * Math.cos((frame ?? 40) / 144 * 2 * Math.PI))) + '" cy="120" rx="435" ry="355" fill="url(#' + id + '-glow)" opacity="' + state.glow + '"/>',
-    ribbons,
-    '<path d="M' + state.x + ' 0h360l-270 720h-360z" opacity="' + state.sweep + '" fill="url(#' + id + '-sweep)"/>',
-    '<rect x="25" y="25" width="1230" height="670" rx="16" fill="none" stroke="url(#' + id + '-border)" stroke-width="3" opacity="' + state.border + '"/>',
-    '<rect x="39" y="39" width="1202" height="642" rx="12" fill="none" stroke="' + theme.line + '" opacity=".54"/>',
-    '<g font-family="Arial, DejaVu Sans, Noto Sans CJK JP, Microsoft YaHei, sans-serif" fill="' + theme.ink + '">',
-    '<path d="M100 117h31l-15-26z M108 104h30l-15 26z" fill="' + theme.accent + '" opacity=".65"/>',
-    '<text x="152" y="115" font-size="' + issuerSize + '" letter-spacing="2" fill="' + theme.dim + '">' + escape(claim.issuer) + '</text>',
-    '<text x="100" y="202" font-size="19" letter-spacing="6" font-weight="700" fill="' + theme.accent + '">CERTIFICATE OF ACHIEVEMENT</text>',
-    '<text font-size="' + fontSize + '" font-family="Georgia, DejaVu Serif, Noto Sans CJK JP, Microsoft YaHei, serif" font-weight="700" opacity="' + state.name + '">' + name + '</text>',
-    '<g opacity="' + state.tier + '"><text x="100" y="387" font-size="' + eventSize + '">' + escape(event) + '</text>',
-    '<text x="100" y="422" font-size="' + fittedSize(meta, 850, 17) + '" fill="' + theme.dim + '">' + escape(meta) + '</text></g>',
-    '<g opacity="' + state.rank + '">' + rank + '</g>',
-    '<g opacity="' + state.badge + '"><path d="M1083 135l64 24v43c0 45-35 69-64 79-28-10-64-34-64-79v-43z" fill="' + theme.bg + '" stroke="' + theme.accent + '" stroke-width="2"/>',
-    '<path d="' + (claim.tier === 'winner' ? 'M1083 159l12 23 25 3-19 17 5 25-23-12-23 12 5-25-19-17 25-3z' : claim.tier === 'finalist' ? 'M1083 160l32 29-32 35-32-35z' : 'M1060 195l16 16 32-35') + '" stroke="' + theme.accent + '" fill="none" stroke-width="4" stroke-linejoin="round"/>',
-    '<text x="1083" y="252" text-anchor="middle" font-size="14" letter-spacing="1.4">' + escape(labels[claim.tier].toUpperCase()) + '</text>',
-    qrArt + '</g>',
-    '<path d="M100 541h756" stroke="' + theme.line + '" opacity=".65"/>',
-    '<text x="100" y="584" font-size="19" fill="' + theme.dim + '">' + escape(claim.decision.message) + '</text>',
-    '<text x="100" y="636" font-size="13" letter-spacing="2.3" font-weight="700" fill="' + theme.accent + '">' + (claim.demo ? 'CONCEPT DEMO · FICTIONAL CREDENTIAL' : 'ISSUED WITH AURASEAL') + '</text></g></svg>',
+    '<g font-family="Arial, DejaVu Sans, Noto Sans CJK JP, Microsoft YaHei, sans-serif" fill="' + theme.ink + '">' + render + '</g></svg>',
   ].join('');
 }

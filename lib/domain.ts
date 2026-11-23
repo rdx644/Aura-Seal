@@ -79,7 +79,7 @@ export async function importResults(name: string, file: Buffer): Promise<{ rows:
   try {
     if (extension === 'csv') {
       const csv = new TextDecoder('utf-8', { fatal: true }).decode(file);
-      sheet = parse(csv, { bom: true, relax_column_count: true, max_record_size: 8192 });
+      sheet = parse(csv, { bom: true, relax_column_count: true, max_record_size: 8192, to: maxRows + 2 });
     } else if (extension === 'xlsx') {
       await checkWorkbook(file);
       sheet = await readSheet(file, 1);

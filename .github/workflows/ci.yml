@@ -54,7 +54,7 @@ jobs:
           FFPROBE_PATH: ffprobe
         run: |
           npm test
-          AURASEAL_REAL_BULK=1 AURASEAL_BULK_EVIDENCE=1 AURASEAL_FONT_DIR=/usr/share/fonts/truetype/dejavu npm run test:db
+          AURASEAL_REAL_BULK=1 AURASEAL_BULK_EVIDENCE=1 npm run test:db
           npm start > app.log 2>&1 &
           npm run worker > worker.log 2>&1 &
           for i in {1..45}; do curl -fsS http://localhost:3000/api/health && break; sleep 1; done
