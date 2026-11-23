@@ -1,0 +1,11 @@
+.git
+.github
+.next
+.env*
+data
+node_modules
+evidence
+playwright-report
+test-results
+*.tsbuildinfo
+node-compile-cache
