@@ -60,8 +60,6 @@ jobs:
           for i in {1..45}; do curl -fsS http://localhost:3000/api/health && break; sleep 1; done
           curl -fsS http://localhost:3000/api/health
           npm run test:e2e
-      - name: Build deployment image
-        run: docker build --tag auraseal:ci .
       - if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -72,3 +70,25 @@ jobs:
             app.log
             worker.log
             evidence/G5/batch_run.json
+
+  docker-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and smoke-test the Docker stack
+        run: |
+          {
+            printf 'PUBLIC_ORIGIN=http://localhost:3100\n'
+            printf 'POSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 24)"
+            printf 'AURASEAL_DB_PASSWORD=%s\n' "$(openssl rand -hex 24)"
+          } > .env.ci.deploy
+          docker compose --env-file .env.ci.deploy -f compose.deploy.yaml build web
+          docker compose --env-file .env.ci.deploy -f compose.deploy.yaml up -d --no-build --wait --wait-timeout 120
+          docker compose --env-file .env.ci.deploy -f compose.deploy.yaml ps -a
+          curl -fsS http://localhost:3100/api/health
+          curl -fsS http://localhost:3100/ -o /tmp/auraseal-home.html
+          grep -q 'AuraSeal' /tmp/auraseal-home.html
+      - name: Inspect container state
+        if: always()
+        run: docker compose --env-file .env.ci.deploy -f compose.deploy.yaml ps -a
