@@ -1,0 +1,128 @@
+name: AuraSeal quality gates
+on:
+  workflow_dispatch:
+    inputs:
+      live_agent:
+        description: Record a live Responses API trace using the repository project key
+        type: boolean
+        default: false
+  pull_request:
+  push:
+    branches: [main, 'feature/**']
+permissions:
+  contents: read
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 32
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: auraseal
+          POSTGRES_PASSWORD: local_test_admin_only
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s --health-timeout 5s --health-retries 15
+    env:
+      DATABASE_URL: postgresql://auraseal:local_only@127.0.0.1:5432/auraseal
+      PUBLIC_ORIGIN: http://localhost:3000
+      AURASEAL_DATABASE_TEST: "1"
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npx playwright install --with-deps chromium
+      - run: sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-noto-cjk
+      - name: Source, dependency and build checks
+        run: |
+          npm run lint
+          npm run typecheck
+          npm audit --omit=dev --audit-level=high
+          git diff --check HEAD
+          node scripts/check-secrets.mjs
+          npm run build
+      - name: Prepare database
+        env:
+          PGPASSWORD: local_test_admin_only
+        run: |
+          psql -h 127.0.0.1 -U postgres -d auraseal -v ON_ERROR_STOP=1 -f db/local-init.sql
+          npm run db:migrate
+          AURASEAL_ORGANIZER_PASSWORD=synthetic-test-password-local npm run db:organizer -- demo-issuer 'Nova Studio'
+      - name: Integration and browser gates
+        env:
+          FFMPEG_PATH: ffmpeg
+          FFPROBE_PATH: ffprobe
+        run: |
+          npm test
+          AURASEAL_REAL_BULK=1 AURASEAL_BULK_EVIDENCE=1 npm run test:db
+          npm start > app.log 2>&1 &
+          npm run worker > worker.log 2>&1 &
+          for i in {1..45}; do curl -fsS http://localhost:3000/api/health && break; sleep 1; done
+          curl -fsS http://localhost:3000/api/health
+          npm run test:e2e
+      - name: Rehearse PostgreSQL restore
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: bash scripts/ci-restore.sh "$POSTGRES_CONTAINER"
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: auraseal-quality
+          path: |
+            test-results/
+            playwright-report/
+            app.log
+            worker.log
+            evidence/G5/batch_run.json
+            evidence/G6/restore.json
+
+  live-agent:
+    if: github.event_name == 'workflow_dispatch' && inputs.live_agent
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Capture live agent trace
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          mkdir -p evidence/G3
+          npm run --silent test:agent:live > evidence/G3/agent_trace.json
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: auraseal-agent-trace
+          path: evidence/G3/agent_trace.json
+
+  docker-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and smoke-test the Docker stack
+        run: |
+          {
+            printf 'PUBLIC_ORIGIN=http://localhost:3100\n'
+            printf 'POSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 24)"
+            printf 'AURASEAL_DB_PASSWORD=%s\n' "$(openssl rand -hex 24)"
+          } > .env.ci.deploy
+          docker compose --env-file .env.ci.deploy -f compose.deploy.yaml build web
+          docker compose --env-file .env.ci.deploy -f compose.deploy.yaml up -d --no-build --wait --wait-timeout 120
+          docker compose --env-file .env.ci.deploy -f compose.deploy.yaml ps -a
+          curl -fsS http://localhost:3100/api/health
+          curl -fsS http://localhost:3100/ -o /tmp/auraseal-home.html
+          grep -q 'AuraSeal' /tmp/auraseal-home.html
+      - name: Inspect container state
+        if: always()
+        run: docker compose --env-file .env.ci.deploy -f compose.deploy.yaml ps -a
