@@ -1,4 +1,5 @@
 import { setTimeout as wait } from 'node:timers/promises';
+import { z } from 'zod';
 import { artwork, video } from '../packages/certificate/art';
 import { messages, planInput, themes, tiers, type EventFields, type Plan, type Proposal, type Result, type Trace } from './contracts';
 import { demoClaim } from './demo';
@@ -14,6 +15,7 @@ const planSchema = {
   properties: { winner: decisionSchema, finalist: decisionSchema, participant: decisionSchema },
 };
 const preview = { type: 'function', name: 'request_render_preview', description: 'Generate and check representative previews for the proposed templates and approved copy', parameters: planSchema, strict: true } as const;
+const tools = [inspect, preview];
 const outputFormat = { type: 'json_schema', name: 'presentation_plan', strict: true, schema: planSchema };
 const fallback: Plan = {
   winner: { theme: 'ember', message: messages[0] },
@@ -55,7 +57,7 @@ function toolResult(output: ResponseItem[], name: string) {
   if (calls.length !== 1 || call.name !== name || !call.call_id || typeof call.arguments !== 'string') {
     throw new AgentFailure('unexpected_tool_request');
   }
-  return call as ResponseItem & { call_id: string; arguments: string };
+  return { type: 'function_call', name, call_id: call.call_id, arguments: call.arguments };
 }
 
 function previewCheck(rows: Result[], plan: Plan, event: EventFields, trace: Trace) {
@@ -89,13 +91,13 @@ export async function planCertificates(rows: Result[], key = process.env.OPENAI_
     const deadline = AbortSignal.timeout(24_000);
     const ask = (body: object) => request(key, body, provider, trace, deadline);
     const input: object[] = [{ role: 'user', content: 'Inspect the approved tier summary and prepare checked presentation choices.' }];
-    const inspectResponse = await ask({ input, tools: [inspect], parallel_tool_calls: false, tool_choice: { type: 'function', name: inspect.name } });
+    const inspectResponse = await ask({ input, tools, parallel_tool_calls: false, tool_choice: { type: 'function', name: inspect.name } });
     const inspectCall = toolResult(inspectResponse.output, inspect.name);
-    if (inspectCall.arguments.trim() !== '{}') throw new AgentFailure('unexpected_tool_arguments');
+    z.strictObject({}).parse(JSON.parse(inspectCall.arguments));
     input.push(inspectCall, { type: 'function_call_output', call_id: inspectCall.call_id, output: JSON.stringify(summary) });
     trace.push({ step: 'inspect_result_schema', outcome: 'OpenAI requested the tier summary and received aggregate counts and rank availability.' });
 
-    const previewResponse = await ask({ input, tools: [preview], parallel_tool_calls: false, tool_choice: { type: 'function', name: preview.name } });
+    const previewResponse = await ask({ input, tools, parallel_tool_calls: false, tool_choice: { type: 'function', name: preview.name } });
     const previewCall = toolResult(previewResponse.output, preview.name);
     const checkedPlan = planInput.parse(JSON.parse(previewCall.arguments));
     trace.push(
@@ -105,7 +107,7 @@ export async function planCertificates(rows: Result[], key = process.env.OPENAI_
     const quality = previewCheck(rows, checkedPlan, event, trace);
     input.push(previewCall, { type: 'function_call_output', call_id: previewCall.call_id, output: JSON.stringify(quality) });
 
-    const final = await ask({ input, text: { format: outputFormat } });
+    const final = await ask({ input, tools, tool_choice: 'none', text: { format: outputFormat } });
     const output = final.output.filter(item => item.type === 'message').flatMap(item => item.content ?? []);
     if (output.length !== 1 || output[0].type !== 'output_text' || !output[0].text || !final.id?.startsWith('resp_')) {
       throw new AgentFailure('missing_structured_output');
