@@ -1,5 +1,10 @@
 # AuraSeal gate evidence
 
+The release candidate workflow uploads per-theme screenshots, the 50-certificate report, and the isolated PostgreSQL restore report as `auraseal-quality` evidence. Use the artifact from the exact candidate commit. The separate live agent check captures a provider response ID, plan and tool trace with synthetic inputs. Reviewer, public deployment and submission evidence still require the corresponding approvals and hosted run.
+
+## Previous Linux baseline
+
+
 The [Linux CI run](https://github.com/rdx644/Aura-Seal/actions/runs/45251625590) passed both jobs for commit `e932118`. It builds the app, runs the integration and Playwright suites, and starts the deployment Compose stack to check migrations, container health and the home page.
 
 | Gate | Observed evidence | Remaining evidence |

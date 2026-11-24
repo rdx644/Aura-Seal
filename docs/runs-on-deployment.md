@@ -1,34 +1,41 @@
-# Deploy AuraSeal on a runs-on.dev address
+# Deploy AuraSeal with Render and runs-on.dev
 
-AuraSeal needs a Node web service, a separate FFmpeg worker and PostgreSQL. The RunsOn static upload accepts files only. Use a RunsOn CNAME for the canonical HTTPS address of the full application.
+Use the [Render Blueprint](../render.yaml) from the release candidate’s GitHub branch. Render runs the application in Singapore. The public HTTPS origin is `https://auraseal.runs-on.dev`.
 
-1. Claim a name with the GitHub account that will manage the address. If the account already owns a name, use that name or a subdomain permitted by the registry. Use [RunsOn Quickstart](https://runs-on.dev/docs/quickstart).
-2. Build the repository Dockerfile from a verified commit. Deploy the image as a web service with its default command and as a worker with `npm run worker`. Give both services access to the same private PostgreSQL database.
-3. Set `DATABASE_URL` and the exact `PUBLIC_ORIGIN` on both services. For example, use `https://auraseal.runs-on.dev` if that name belongs to the team. Put `OPENAI_API_KEY` only on the web service. Run `npm run db:migrate` once and provision an organizer as described in the README. Keep the web service health check pointed at `/api/health`.
-4. Add the chosen hostname to the application's hosting provider and set the corresponding CNAME in [RunsOn Manage](https://runs-on.dev/manage). Enter the host supplied by the provider. Wait for DNS and provider TLS verification. Render is one compatible Docker host and has a [RunsOn mapping guide](https://runs-on.dev/docs/guides/render).
-5. From a separate device, open the public development address and verify it serves AuraSeal. Run the synthetic organizer workflow all the way through download. Scan the exported QR and check the LinkedIn share link against the canonical origin. Record the commit, external URL and smoke evidence under G7.
+| Dependency | Configuration | Purpose |
+|---|---|---|
+| Render web service | Docker, 0.5 CPU / 512 MB, `/api/health` | Next.js, organizer API and public credential pages |
+| Render background worker | Same Dockerfile, 1 CPU / 2 GB | Asynchronous H.264/PNG/PDF exports with bundled FFmpeg and fonts |
+| Render Postgres | PostgreSQL 17, 256 MB, 5 GB initial storage | Results, sessions, credential records, durable jobs and assets |
+| OpenAI project key | `OPENAI_API_KEY` on the web service | Live Responses API planning |
+| runs-on.dev claim | `auraseal.runs-on.dev` with a CNAME to the Render web service | Public hostname with TLS issued by Render |
 
-Use a separate database for each environment. Set the public origin before issuing any certificate because the origin is embedded in its QR, including in downloaded copies. Owner sign-in is required for DNS changes. See [release and recovery](release.md) for backup and rollback.
+Render injects the private database URL into both services. Each service runs the idempotent, advisory-lock-protected migration before startup. The database blocks public connections. The Render plans have paid compute and storage. Review the estimate on the Blueprint confirmation screen. See [Render pricing](https://render.com/pricing).
+
+## Provision and connect the domain
+
+1. Claim `auraseal.runs-on.dev` with the team’s GitHub account. For a different claimed hostname, update the Blueprint domain and both `PUBLIC_ORIGIN` values before the first deployment. See [runs-on.dev Quickstart](https://runs-on.dev/docs/quickstart).
+2. Open [New Render Blueprint](https://dashboard.render.com/blueprint/new?repo=https://github.com/rdx644/Aura-Seal), select the release candidate’s branch, and connect GitHub if prompted. Set `OPENAI_API_KEY` in Render’s secret field. Review the three paid resources and apply the Blueprint.
+3. In [runs-on.dev Manage](https://runs-on.dev/manage), point the claimed hostname’s CNAME at the actual `*.onrender.com` web service hostname shown by Render. Verify the domain in Render’s Custom Domains settings and wait for its TLS certificate. Keep the Render hostname available as the DNS target. See [runs-on.dev’s Render guide](https://runs-on.dev/docs/guides/render).
+4. Confirm `https://auraseal.runs-on.dev/api/health` returns `{"status":"ok"}`. Run the release checks on the custom origin. The configured origin is embedded in certificates at render time.
+5. Provision the organizer in the private Render web shell. Enter a unique password with `read -rs AURASEAL_ORGANIZER_PASSWORD`, then run the commands below. Use a synthetic issuer for gate evidence.
+
+```sh
+export AURASEAL_ORGANIZER_PASSWORD
+npm run db:organizer -- demo-issuer "Nova Studio"
+unset AURASEAL_ORGANIZER_PASSWORD
+```
+
+The Blueprint uses manual deployment. Promote the same green Git commit to the web and worker services. See the [release runbook](release.md) for hosted smoke and rollback verification.
 
 ## Existing Docker host
 
-Copy `deployment.env.example` to `.env.deploy` on the host. Set independent random passwords and leave the example file as a template. Use a hexadecimal application database password so it can be placed in the connection URL. The database initialization script runs only when the named data volume is empty.
-
-Run this from the checked-out repository.
+The separate [Compose deployment](../compose.deploy.yaml) supports an existing host. Copy `deployment.env.example` to `.env.deploy`, configure independent database passwords and the canonical HTTPS origin, and run:
 
 ```sh
 docker compose --env-file .env.deploy -f compose.deploy.yaml build web
-docker compose --env-file .env.deploy -f compose.deploy.yaml up -d --no-build
-docker compose --env-file .env.deploy -f compose.deploy.yaml ps -a
+docker compose --env-file .env.deploy -f compose.deploy.yaml up -d --no-build --wait
 curl -fsS http://127.0.0.1:3100/api/health
 ```
 
-The web port binds to loopback. Connect the host's HTTPS reverse proxy to that port. Configure it to serve the RunsOn hostname and preserve the public Host header. Use the public hostname of the ingress as the RunsOn CNAME and have the ingress issue a certificate for the RunsOn hostname. Use an ingress-preserved client address header only when the proxy overwrites it. The database is reachable on the Compose network only.
-
-Provision the organizer through the private host shell. Set `AURASEAL_ORGANIZER_PASSWORD` in that shell beforehand.
-
-```sh
-docker compose --env-file .env.deploy -f compose.deploy.yaml exec -T -e AURASEAL_ORGANIZER_PASSWORD web npm run db:organizer -- organizer "Your organization"
-```
-
-Keep a backup of the database volume before changing versions. A successful migration container exits with code 0. The web and worker stay running.
+The web port binds to loopback. Route its public HTTPS hostname through the host’s reverse proxy and keep PostgreSQL on the private Compose network.

@@ -24,10 +24,29 @@ test('TEST-10 organizer approval to download, verify, share and revoke with mobi
   await page.getByLabel('Results file').setInputFiles('tests/fixtures/demo.csv');
   await page.getByRole('button', { name: 'Validate results' }).click();
   await expect(page.getByText('4 valid', { exact: true })).toBeVisible();
-  await page.getByLabel('Preview recipient').selectOption('3');
-  await expect(page.getByText('Template · Daybreak')).toBeVisible();
+  const review = page.locator('.review');
+  const svg = review.locator('svg[role="img"]');
+  const name = svg.locator('text').filter({ has: page.locator('tspan') });
+  for (const [row, theme] of [['0', 'Afterglow'], ['1', 'Verdant'], ['3', 'Daybreak']]) {
+    await page.getByLabel('Preview recipient').selectOption(row);
+    await expect(review.getByText('Template · ' + theme)).toBeVisible();
+    const bounds = await name.evaluate(element => {
+      const { x, y, width, height } = (element as unknown as SVGGraphicsElement).getBBox();
+      return { x, y, right: x + width, bottom: y + height };
+    });
+    expect(bounds.x).toBeGreaterThanOrEqual(95);
+    expect(bounds.y).toBeGreaterThan(202);
+    expect(bounds.right).toBeLessThan(995);
+    expect(bounds.bottom).toBeLessThan(375);
+    await svg.screenshot({ path: 'test-results/certificate-' + theme.toLowerCase() + '.png' });
+  }
+  await expect(name.locator('tspan')).toHaveCount(2);
   await page.getByRole('button', { name: 'Generate proposal' }).click();
   await expect(page.getByText('Awaiting organizer approval.')).toBeVisible();
+  if (process.env.AURASEAL_REQUIRE_LIVE_AGENT === '1') {
+    await expect(page.getByText('OpenAI', { exact: true })).toBeVisible();
+    await expect(page.getByText('Generated representative previews for 3 populated tiers.')).toBeVisible();
+  }
   await expect(page.getByRole('button', { name: 'Approve and issue' })).toBeDisabled();
   await page.getByLabel('I approve issuance', { exact: false }).check();
   await page.getByRole('button', { name: 'Approve and issue' }).click();
@@ -46,6 +65,12 @@ test('TEST-10 organizer approval to download, verify, share and revoke with mobi
     'https://www.linkedin.com/sharing/share-offsite/?url=' + encodeURIComponent(baseURL + publicLink));
   const [download] = await Promise.all([recipient.waitForEvent('download'), recipient.getByRole('link', { name: 'Download MP4' }).click()]);
   expect(download.suggestedFilename()).toMatch(/^AuraSeal-[a-f0-9]+\.mp4$/);
+  const publicId = publicLink.split('/').at(-1) ?? '';
+  for (const [format, type] of [['png', 'image/png'], ['pdf', 'application/pdf']]) {
+    const response = await recipient.request.get('/api/verify/' + publicId + '/download/' + format);
+    expect(response.ok()).toBe(true);
+    expect(response.headers()['content-type']).toBe(type);
+  }
   await recipient.screenshot({ path: 'test-results/recipient-mobile.png', fullPage: true });
   const first = page.locator('.batch-list li').filter({ hasText: 'Maya Chen' });
   await first.getByRole('button', { name: 'Revoke' }).click();

@@ -1,5 +1,11 @@
 name: AuraSeal quality gates
 on:
+  workflow_dispatch:
+    inputs:
+      live_agent:
+        description: Record a live Responses API trace using the repository project key
+        type: boolean
+        default: false
   pull_request:
   push:
     branches: [main, 'feature/**']
@@ -60,6 +66,10 @@ jobs:
           for i in {1..45}; do curl -fsS http://localhost:3000/api/health && break; sleep 1; done
           curl -fsS http://localhost:3000/api/health
           npm run test:e2e
+      - name: Rehearse PostgreSQL restore
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: bash scripts/ci-restore.sh "$POSTGRES_CONTAINER"
       - if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -70,6 +80,30 @@ jobs:
             app.log
             worker.log
             evidence/G5/batch_run.json
+            evidence/G6/restore.json
+
+  live-agent:
+    if: github.event_name == 'workflow_dispatch' && inputs.live_agent
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Capture live agent trace
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          mkdir -p evidence/G3
+          npm run --silent test:agent:live > evidence/G3/agent_trace.json
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: auraseal-agent-trace
+          path: evidence/G3/agent_trace.json
 
   docker-smoke:
     runs-on: ubuntu-latest

@@ -20,7 +20,22 @@ Protect the database from the public internet. Use an ingress TLS certificate an
 
 Run the database tests against a dedicated migrated database using `AURASEAL_DATABASE_TEST=1 npm run test:db`. Add `AURASEAL_REAL_BULK=1` for the 50-item native render check. The default integration test uses synthetic payloads and tests queue mechanics. For browser tests, install Chromium with `npx playwright install chromium`, start the server and worker, and use the synthetic login defined in the CI workflow or provide its test environment overrides.
 
-Back up PostgreSQL before migration. For a rollback, stop intake on the affected service, pause workers, redeploy the previous commit to web and worker, and leave the shared database intact. Restore a backup into an isolated database for validation. Re-run sign-in, verification, download, issue and render smoke checks before re-enabling traffic. Keep the canonical origin stable across deployments.
+Back up PostgreSQL before migration. For a rollback, stop intake on the affected service, pause workers, redeploy the previous commit to web and worker, and leave the shared database intact. Restore a backup into an isolated database for validation. Re-run sign-in, verification, download, issue and render smoke checks before re-enabling traffic. Keep the canonical origin stable across deployments. In Render, pick the previous green Git commit for both services, complete the worker and web redeploys, then repeat the smoke checks. Record both deploy IDs and the verification results.
+
+## Live agent and hosted smoke
+
+Set `OPENAI_API_KEY` through the server environment or a repository secret. Run `npm run --silent test:agent:live` to capture the sanitized plan, provider response ID and tool trace from synthetic rows. After the workflow file reaches the default branch, GitHub Actions can run the same check with the manual `live_agent` input. A deterministic fallback fails that gate.
+
+With the custom domain serving the candidate and a synthetic organizer provisioned, provide the following environment to Playwright and run `npm run test:e2e` from outside Render. Install Chromium with `npx playwright install chromium` first.
+
+| Variable | Setting |
+|---|---|
+| `PUBLIC_ORIGIN` | `https://auraseal.runs-on.dev` |
+| `AURASEAL_TEST_LOGIN` and `AURASEAL_TEST_PASSWORD` | Synthetic organizer credentials |
+| `AURASEAL_REQUIRE_LIVE_AGENT` | `1` to require a live proposal |
+| `AURASEAL_RECORD_DEMO` | `1` to save the browser recording |
+
+Open the issued URL from a second device, scan the MP4 QR, and record the hosted verification, download and share results. A hosted smoke run writes synthetic credentials to the target database. Use a synthetic issuer throughout.
 
 ## Promotion evidence
 

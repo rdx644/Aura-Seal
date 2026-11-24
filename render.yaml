@@ -1,0 +1,47 @@
+services:
+  - type: web
+    name: auraseal-web
+    runtime: docker
+    region: singapore
+    plan: 0.5c-512mb
+    autoDeployTrigger: "off"
+    preDeployCommand: npm run db:migrate
+    healthCheckPath: /api/health
+    domains:
+      - auraseal.runs-on.dev
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: auraseal-db
+          property: connectionString
+      - key: PUBLIC_ORIGIN
+        value: https://auraseal.runs-on.dev
+      - key: OPENAI_API_KEY
+        sync: false
+
+  - type: worker
+    name: auraseal-render
+    runtime: docker
+    region: singapore
+    plan: 1c-2g
+    autoDeployTrigger: "off"
+    preDeployCommand: npm run db:migrate
+    dockerCommand: ./node_modules/.bin/tsx workers/render/index.ts
+    maxShutdownDelaySeconds: 220
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: auraseal-db
+          property: connectionString
+      - key: PUBLIC_ORIGIN
+        value: https://auraseal.runs-on.dev
+
+databases:
+  - name: auraseal-db
+    databaseName: auraseal
+    user: auraseal
+    region: singapore
+    plan: 0.1c-256mb
+    postgresMajorVersion: "17"
+    diskSizeGB: 5
+    ipAllowList: []
