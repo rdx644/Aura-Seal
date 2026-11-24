@@ -164,7 +164,7 @@ export function Workspace({ user, initialEvents, initialImports }: { user: User;
             <div className="panel-heading"><h2>Agent proposal</h2>{proposed && <span className="counts"><span>{proposed.source === 'openai' ? 'OpenAI' : 'Approved fallback'}</span></span>}</div>
             {!proposed ? <><p>Choose a theme and approved achievement copy for each tier.</p>
               <button className="button primary" onClick={plan} disabled={!!busy}>Generate proposal</button></> : <>
-              <ol className="trace">{proposed.trace.map(step => <li key={step.step}><strong>{step.step.replaceAll('_', ' ')}</strong><span>{step.outcome}</span></li>)}</ol>
+              <ol className="trace">{proposed.trace.map((step, index) => <li key={step.step + ':' + index}><strong>{step.step.replaceAll('_', ' ')}</strong><span>{step.outcome}</span></li>)}</ol>
               {!current.batchId && user.role === 'issuer' && <div className="approval">
                 <label className="check"><input type="checkbox" checked={confirmed} onChange={change => setConfirmed(change.target.checked)} /> I approve issuance of {current.rows.length} validated results and public verification for those credentials.</label>
                 <button className="button primary" disabled={!confirmed || !!busy} onClick={approve}>Approve and issue</button>

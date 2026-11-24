@@ -17,14 +17,14 @@ export async function proposalFor(user: Organizer, id: string): Promise<Proposal
   const current = await transaction(user.org_id, async db => {
     const record = await loadImport(db, user, id, true);
     if (!record) throw new Problem(404, 'Import not found');
-    if (record.value.proposal) return record.value;
+    if (record.value.proposal) return record;
     if (!record.value.rows.length) throw new Problem(409, 'Import needs at least one valid row');
     const claim = await db.query("update imports set proposal_started=now() where id=$1 and (proposal_started is null or proposal_started<now()-interval '30 seconds')", [id]);
     if (!claim.rowCount) throw new Problem(409, 'An agent proposal is already in progress');
-    return record.value;
+    return record;
   });
-  if (current.proposal) return current.proposal;
-  const proposed = await planCertificates(current.rows);
+  if (current.value.proposal) return current.value.proposal;
+  const proposed = await planCertificates(current.value.rows, undefined, undefined, current.event);
   return transaction(user.org_id, async db => {
     const { rows } = await db.query<{ proposal: Proposal }>(
       'update imports set proposal=$2,proposal_started=null where id=$1 and proposal is null returning proposal', [id, proposed],
